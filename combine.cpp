@@ -1966,7 +1966,7 @@ void CNPC_Combine::GatherConditions()
 			// occupy a vacant attack slot, they do so. This holds the slot until their
 			// schedule breaks and schedule selection runs again, essentially reserving this
 			// slot. If they do not select an attack schedule, then they'll release the slot.
-			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 			{
 				SetCondition(COND_COMBINE_ATTACK_SLOT_AVAILABLE);
 			}
@@ -4056,12 +4056,12 @@ int CNPC_Combine::SelectCombatSchedule()
 			{
 				// I'm the leader, but I didn't get the job suppressing the enemy. We know this because
 				// This code only runs if the code above didn't assign me SCHED_COMBINE_SUPPRESS.
-				if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+				if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 				{
 					return SCHED_RANGE_ATTACK1;
 				}
 
-				if (HasCondition(COND_WEAPON_HAS_LOS) && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+				if (HasCondition(COND_WEAPON_HAS_LOS) && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 				{
 					// If everyone else is attacking and I have line of fire, wait for a chance to cover someone.
 					if (OccupyStrategySlot(SQUAD_SLOT_OVERWATCH))
@@ -4089,7 +4089,7 @@ int CNPC_Combine::SelectCombatSchedule()
 					}
 				}
 
-				if (!bFirstContact && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+				if (!bFirstContact && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 				{
 					if (random->RandomInt(0, 100) < 60)
 					{
@@ -4211,7 +4211,7 @@ int CNPC_Combine::SelectCombatSchedule()
 			return SCHED_COMBINE_DEPLOY_MANHACK;
 #endif
 
-		if (GetEnemy() && !(GetEnemy()->GetFlags() & FL_NOTARGET) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+		if (GetEnemy() && !(GetEnemy()->GetFlags() & FL_NOTARGET) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 		{
 			// Charge in and break the enemy's cover!
 			return SCHED_ESTABLISH_LINE_OF_FIRE;
@@ -4241,7 +4241,7 @@ int CNPC_Combine::SelectCombatSchedule()
 		}
 		else
 #endif
-			if ((HasCondition(COND_TOO_FAR_TO_ATTACK) || IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY)) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+			if ((HasCondition(COND_TOO_FAR_TO_ATTACK) || IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY)) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 			{
 				return SCHED_COMBINE_PRESS_ATTACK;
 			}
@@ -4625,10 +4625,10 @@ int CNPC_Combine::SelectFailSchedule(int failedSchedule, int failedTask, AI_Task
 	if (failedSchedule == SCHED_COMBINE_TAKE_COVER1)
 	{
 #ifdef MAPBASE
-		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10) && HasCondition(COND_SEE_ENEMY)
+		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2) && HasCondition(COND_SEE_ENEMY)
 			&& (!npc_combine_new_cover_behavior.GetBool() || (taskFailCode == FAIL_NO_COVER)))
 #else
-		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10) && HasCondition(COND_SEE_ENEMY))
+		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2) && HasCondition(COND_SEE_ENEMY))
 #endif
 		{
 			// This eases the effects of an unfortunate bug that usually plagues shotgunners. Since their rate of fire is low,
@@ -4795,12 +4795,12 @@ int CNPC_Combine::SelectScheduleAttack()
 		{
 			if (HasCondition(COND_SEE_ENEMY))
 			{
-				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 					return SCHED_RANGE_ATTACK1;
 			}
 			else
 			{
-				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 					return SCHED_COMBINE_PRESS_ATTACK;
 			}
 		}
@@ -4831,7 +4831,7 @@ int CNPC_Combine::SelectScheduleAttack()
 #endif
 
 		// Engage if allowed
-		if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+		if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 		{
 			return SCHED_RANGE_ATTACK1;
 		}
@@ -4968,7 +4968,7 @@ int CNPC_Combine::TranslateSchedule(int scheduleType)
 	break;
 	case SCHED_COMBINE_TAKECOVER_FAILED:
 	{
-		if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+		if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 		{
 			return TranslateSchedule(SCHED_RANGE_ATTACK1);
 		}
@@ -5057,7 +5057,7 @@ int CNPC_Combine::TranslateSchedule(int scheduleType)
 #endif
 		if (IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY) && !IsRunningBehavior())
 		{
-			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 			{
 				return SCHED_COMBINE_PRESS_ATTACK;
 			}
@@ -6648,10 +6648,10 @@ bool CNPC_Combine::OnBeginMoveAndShoot()
 			return true; // Commandable Combine soldiers don't need a squad slot to move and shoot
 #endif
 
-		if (HasStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+		if (HasStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 			return true; // already have the slot I need
 
-		if (!HasStrategySlotRange(SQUAD_SLOT_GRENADE1, SQUAD_SLOT_ATTACK_OCCLUDER) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
+		if (!HasStrategySlotRange(SQUAD_SLOT_GRENADE1, SQUAD_SLOT_ATTACK_OCCLUDER) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
 			return true;
 	}
 	return false;
