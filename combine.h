@@ -561,10 +561,12 @@ private:
 	bool			m_bIsReturningGrenade;		// [MODIFICATION] State flag; true when a special ability is active. Used to block the default grenade throw AnimEvent.
 	float			m_flNextGrenadeCatchTime;	// [MODIFICATION] Shared cooldown timer for all special grenade abilities to prevent loops.
 	bool			m_bForceFastTurn;			// [MODIFICATION] A temporary flag to enable a high-speed "turbo" turn, used by the MaxYawSpeed() override.
+	
 	// Dynamic Cover System - Main variables
-	EHANDLE m_hLowCoverProp;   // For low cover props // [MODIFICATION-Dynamic Cover] -  Dynamic Cover
-	EHANDLE m_hHighCoverProp;  // For high cover props // [MODIFICATION-Dynamic Cover] -  Dynamic Cover
-	float m_flNextPropSearchTime; // Timer to control search for new props // [MODIFICATION-Dynamic Cover] -  Dynamic Cover
+	EHANDLE m_hLowCoverProp;   // For low cover props  // [MODIFICATION-Dynamic Cover]
+	EHANDLE m_hHighCoverProp;  // For high cover props // [MODIFICATION-Dynamic Cover]
+	float m_flNextPropSearchTime; // Timer to control search for new props // [MODIFICATION-Dynamic Cover]
+	CHandle<CBaseEntity> m_hLastArrivedProp;  // Last Arrived Prop // [MODIFICATION-Dynamic Cover]
 	
 	
 	
