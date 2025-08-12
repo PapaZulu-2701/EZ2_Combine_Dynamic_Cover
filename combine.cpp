@@ -390,9 +390,10 @@ CNPC_Combine::CNPC_Combine()
 	m_flNextGrenadeCatchTime = 0;		// [MODIFICATION] Cooldown timer. Starts at 0. Without it, the ability could be on cooldown when the NPC spawns.
 	m_bForceFastTurn = false;			// [MODIFICATION] "Turbo turn" flag. Starts false. Without it, the AI would have maximum turn speed at all times.
 
-	m_hLowCoverProp = NULL;				// [MODIFICATION-Dynamic Cover] Handle to selected low cover prop for dynamic cover system.
-	m_hHighCoverProp = NULL;			// [MODIFICATION-Dynamic Cover] Handle to selected high cover prop for dynamic cover system.
-	m_flNextPropSearchTime = 0;			// [MODIFICATION-Dynamic Cover] Timer to control how often dynamic cover props are searched. Allows immediate search on spawn.
+	m_hLowCoverProp = NULL;				// [MODIFICATION] Handle to selected low cover prop for dynamic cover system. // [MODIFICATION-Dynamic Cover]
+	m_hHighCoverProp = NULL;			// [MODIFICATION] Handle to selected high cover prop for dynamic cover system. // [MODIFICATION-Dynamic Cover]
+	m_hLastArrivedProp = NULL;			// Initialize last arrived prop as NULL // [MODIFICATION-Dynamic Cover]
+	m_flNextPropSearchTime = 0;			// [MODIFICATION] Timer to control how often dynamic cover props are searched. Allows immediate search on spawn. // [MODIFICATION-Dynamic Cover]
 
 #ifdef EZ
 	// For players who use npc_create
@@ -1302,6 +1303,12 @@ int CNPC_Combine::CountNPCsUsingProp(CBaseEntity* pProp)
 		if (!pCombine || pCombine == this) // Skip self
 			continue;
 
+		// CRASH PREVENTION: Skip dead/dying NPCs to avoid race conditions during cover search
+		// This prevents crashes when NPCs die exactly during timer-triggered cover calculations
+		// Double validation ensures maximum safety against timing-critical scenarios
+		if (pCombine->GetHealth() <= 0 || !pCombine->IsAlive())
+			continue;
+
 		// Check if using the same prop
 		if (pCombine->m_hLowCoverProp == pProp || pCombine->m_hHighCoverProp == pProp)
 		{
@@ -1373,9 +1380,9 @@ bool CNPC_Combine::DynamicPropCover()
 	const int MAX_NPCS_PER_PROP = 2;
 
 	// Search for all props in radius
-	for (CBaseEntity* pEntity = gEntList.FindEntityInSphere(NULL, GetAbsOrigin(), 512.0f);
+	for (CBaseEntity* pEntity = gEntList.FindEntityInSphere(NULL, GetAbsOrigin(), 270.0f);
 		pEntity;
-		pEntity = gEntList.FindEntityInSphere(pEntity, GetAbsOrigin(), 512.0f))
+		pEntity = gEntList.FindEntityInSphere(pEntity, GetAbsOrigin(), 270.0f))
 	{
 		if (!FClassnameIs(pEntity, "prop_physics") && !FClassnameIs(pEntity, "prop_ragdoll"))
 			continue;
@@ -1879,41 +1886,94 @@ void CNPC_Combine::GatherConditions()
 	ClearCondition(COND_COMBINE_ATTACK_SLOT_AVAILABLE);
 
 	if (GetState() == NPC_STATE_COMBAT)
-	{	
-		// [MODIFICATION-Dynamic Cover] -start
-		// Only search for new props when timer allows
+	{
+		// Check timer before seeking new cover
 		if (gpGlobals->curtime >= m_flNextPropSearchTime)
 		{
-			// Clear conditions and search for new props
 			ClearCondition(COND_COMBINE_HAS_LOW_COVER);
 			ClearCondition(COND_COMBINE_HAS_HIGH_COVER);
+			m_hLastArrivedProp = NULL; // Clear flag to allow new cover selection
 			DynamicPropCover();
-
-			// Set next search time (8-12 seconds)
-			float randomInterval = RandomFloat(8.0f, 12.0f);
-			m_flNextPropSearchTime = gpGlobals->curtime + randomInterval;
-			Msg("[DEBUG] GatherConditions: NEW SEARCH executed - next in %.1fs\n", randomInterval);
+			Msg("[DEBUG] GatherConditions: Timer expired - searching new cover\n");
 		}
 		else
 		{
-			// Use already selected props
-			Msg("[DEBUG] GatherConditions: Keeping current props - next search in %.1fs\n",
+			Msg("[DEBUG] GatherConditions: Timer active - keeping current cover (%.1fs remaining)\n",
 				m_flNextPropSearchTime - gpGlobals->curtime);
+			// Don't search for new props, but continue validating current ones below
 		}
 
-		// Check if enemy is too close to current props
-		Vector enemyPos = GetEnemy()->GetAbsOrigin();
+		// Check if ANY enemies (player + NPCs) are too close to current props
+		CBaseEntity* pEnemy = GetEnemy();
+		if (!pEnemy) return; // CRASH PREVENTION: Validate enemy exists
+
+		Vector enemyPos = pEnemy->GetAbsOrigin();
 		const float MIN_COVER_DISTANCE = 150.0f;
-		bool enemyTooClose = (m_hLowCoverProp && enemyPos.DistTo(m_hLowCoverProp->GetAbsOrigin()) < MIN_COVER_DISTANCE) ||
-			(m_hHighCoverProp && enemyPos.DistTo(m_hHighCoverProp->WorldSpaceCenter()) < MIN_COVER_DISTANCE);
+
+		// Check player distance + enemy NPCs in one unified check
+		bool enemyTooClose = false;
+
+		// LOW COVER enemy proximity check
+		if (m_hLowCoverProp)
+		{
+			// Player too close?
+			if (enemyPos.DistTo(m_hLowCoverProp->GetAbsOrigin()) < MIN_COVER_DISTANCE)
+			{
+				enemyTooClose = true;
+				Msg("[DEBUG] Player enemy too close to LOW COVER\n");
+			}
+
+			// Enemy NPCs too close?
+			if (!enemyTooClose)
+			{
+				CBaseEntity* pEntity = NULL;
+				for (CEntitySphereQuery sphere(m_hLowCoverProp->GetAbsOrigin(), MIN_COVER_DISTANCE); (pEntity = sphere.GetCurrentEntity()) != NULL; sphere.NextEntity())
+				{
+					CAI_BaseNPC* pNPC = dynamic_cast<CAI_BaseNPC*>(pEntity);
+					if (pNPC && pNPC != this && IRelationType(pNPC) == D_HT) // Enemy relationship
+					{
+						enemyTooClose = true;
+						Msg("[DEBUG] Enemy NPC too close to LOW COVER\n");
+						break;
+					}
+				}
+			}
+		}
+
+		// HIGH COVER enemy proximity check
+		if (!enemyTooClose && m_hHighCoverProp)
+		{
+			// Player too close?
+			if (enemyPos.DistTo(m_hHighCoverProp->WorldSpaceCenter()) < MIN_COVER_DISTANCE)
+			{
+				enemyTooClose = true;
+				Msg("[DEBUG] Player enemy too close to HIGH COVER\n");
+			}
+
+			// Enemy NPCs too close?
+			if (!enemyTooClose)
+			{
+				CBaseEntity* pEntity = NULL;
+				for (CEntitySphereQuery sphere(m_hHighCoverProp->WorldSpaceCenter(), MIN_COVER_DISTANCE); (pEntity = sphere.GetCurrentEntity()) != NULL; sphere.NextEntity())
+				{
+					CAI_BaseNPC* pNPC = dynamic_cast<CAI_BaseNPC*>(pEntity);
+					if (pNPC && pNPC != this && IRelationType(pNPC) == D_HT) // Enemy relationship
+					{
+						enemyTooClose = true;
+						Msg("[DEBUG] Enemy NPC too close to HIGH COVER\n");
+						break;
+					}
+				}
+			}
+		}
 
 		if (enemyTooClose)
 		{
-			Msg("[DEBUG] GatherConditions: Enemy too close to current props\n");
+			Msg("[DEBUG] GatherConditions: Enemies too close to current props\n");
 		}
 		else
 		{
-			// Validate LOW COVER
+			// Validate LOW COVER (only navigation check needed now)
 			if (m_hLowCoverProp)
 			{
 				Vector enemyToProp = m_hLowCoverProp->GetAbsOrigin() - enemyPos;
@@ -1933,7 +1993,7 @@ void CNPC_Combine::GatherConditions()
 				}
 			}
 
-			// Validate HIGH COVER
+			// Validate HIGH COVER (only navigation check needed now)
 			if (m_hHighCoverProp)
 			{
 				Vector enemyToProp = m_hHighCoverProp->WorldSpaceCenter() - enemyPos;
@@ -1953,6 +2013,8 @@ void CNPC_Combine::GatherConditions()
 				}
 			}
 		}
+	// [MODIFICATION-Dynamic Cover] - End
+	 
 
 #ifdef MAPBASE
 		// Don't override the standoff
@@ -1966,7 +2028,7 @@ void CNPC_Combine::GatherConditions()
 			// occupy a vacant attack slot, they do so. This holds the slot until their
 			// schedule breaks and schedule selection runs again, essentially reserving this
 			// slot. If they do not select an attack schedule, then they'll release the slot.
-			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 			{
 				SetCondition(COND_COMBINE_ATTACK_SLOT_AVAILABLE);
 			}
@@ -2548,7 +2610,7 @@ void CNPC_Combine::StartTask(const Task_t* pTask)
 
 	switch (pTask->iTask)
 	{
-	case TASK_COMBINE_MOVE_TO_HIGH_COVER: // [MODIFICATION - Dynamic Cover]
+	case TASK_COMBINE_MOVE_TO_HIGH_COVER:  // [MODIFICATION-Dynamic Cover]
 	{
 		if (!m_hHighCoverProp || !GetEnemy())
 		{
@@ -2572,35 +2634,59 @@ void CNPC_Combine::StartTask(const Task_t* pTask)
 		Vector enemyToProp = propCenter - enemyPos;
 		VectorNormalize(enemyToProp);
 		enemyToProp.z = 0;
+
 		Vector vMins, vMaxs;
 		m_hHighCoverProp->GetCollideable()->WorldSpaceSurroundingBounds(&vMins, &vMaxs);
 		const float BASE_OFFSET = 80.0f;
+
 		Vector positions[3] = {
-		 Vector(vMins.x, propCenter.y, vMins.z) + (enemyToProp * BASE_OFFSET),  // ESQUERDA
-		 propCenter + (enemyToProp * BASE_OFFSET),                              // CENTRO  
-		 Vector(vMaxs.x, propCenter.y, vMins.z) + (enemyToProp * BASE_OFFSET)   // DIREITA
+			Vector(vMins.x, propCenter.y, vMins.z) + (enemyToProp * BASE_OFFSET),  // LEFT
+			propCenter + (enemyToProp * BASE_OFFSET),                              // CENTER  
+			Vector(vMaxs.x, propCenter.y, vMins.z) + (enemyToProp * BASE_OFFSET)   // RIGHT
 		};
+
 		// Choose zone closest to enemy
 		int chosenIndex = 1; // Default: center
 		float distances[3] = {
-		 enemyPos.DistTo(positions[0]),
-		 enemyPos.DistTo(positions[1]),
-		 enemyPos.DistTo(positions[2])
+			enemyPos.DistTo(positions[0]),
+			enemyPos.DistTo(positions[1]),
+			enemyPos.DistTo(positions[2])
 		};
+
 		if (distances[0] < distances[1] && distances[0] < distances[2]) chosenIndex = 0;
 		else if (distances[2] < distances[1] && distances[2] < distances[0]) chosenIndex = 2;
+
 		Vector targetPosition = positions[chosenIndex];
 		float distToTarget = GetAbsOrigin().DistTo(targetPosition);
+
 		Msg("[DEBUG] HIGH_COVER: Zone %s, dist=%.1f\n",
 			(chosenIndex == 0) ? "LEFT" : (chosenIndex == 2) ? "RIGHT" : "CENTER", distToTarget);
-		// Check if already arrived
+
+		// Check if already arrived at target position
 		if (distToTarget <= 50.0f)
 		{
 			ClearCondition(COND_COMBINE_HAS_HIGH_COVER);
+
+			// Only reset timer if this is a new prop (different from last arrived)
+			if (m_hLastArrivedProp != m_hHighCoverProp)
+			{
+				float randomInterval = RandomFloat(8.0f, 12.0f);
+				m_flNextPropSearchTime = gpGlobals->curtime + randomInterval;
+				m_hLastArrivedProp = m_hHighCoverProp;  // Mark this prop as last arrived
+				Msg("[DEBUG] HIGH_COVER: NEW prop arrived! Timer reset to %.1fs\n", randomInterval);
+			}
+			else
+			{
+				// Same prop - don't reset timer, let it continue counting down
+				Msg("[DEBUG] HIGH_COVER: Same prop - timer continues (%.1fs remaining)\n",
+					m_flNextPropSearchTime - gpGlobals->curtime);
+			}
+
 			TaskComplete();
 			return;
 		}
-		// Set navigation (GatherConditions already validated navigability)
+
+		// Set navigation goal (GatherConditions already validated navigability)
 		AI_NavGoal_t goal(targetPosition, ACT_RUN, AIN_DEF_TOLERANCE);
 		if (GetNavigator()->SetGoal(goal))
 		{
@@ -2615,7 +2701,8 @@ void CNPC_Combine::StartTask(const Task_t* pTask)
 
 
 
-	case TASK_COMBINE_MOVE_TO_LOW_COVER: // [MODIFICATION - Dynamic Cover]
+
+	case TASK_COMBINE_MOVE_TO_LOW_COVER: // [MODIFICATION-Dynamic Cover]
 	{
 		if (!m_hLowCoverProp || !GetEnemy())
 		{
@@ -2623,24 +2710,40 @@ void CNPC_Combine::StartTask(const Task_t* pTask)
 			return;
 		}
 
-		// Calculate cover position
+		// Calculate cover position behind the prop
 		Vector enemyToProp = m_hLowCoverProp->GetAbsOrigin() - GetEnemy()->GetAbsOrigin();
 		VectorNormalize(enemyToProp);
 		enemyToProp.z = 0;
 		Vector targetPosition = m_hLowCoverProp->GetAbsOrigin() + (enemyToProp * 80.0f);
-
 		float distToTarget = GetAbsOrigin().DistTo(targetPosition);
+
 		Msg("[DEBUG] LOW_COVER: dist=%.1f\n", distToTarget);
 
-		// Check if already arrived
+		// Check if already arrived at target position
 		if (distToTarget <= 50.0f)
 		{
 			ClearCondition(COND_COMBINE_HAS_LOW_COVER);
+
+			// Only reset timer if this is a new prop (different from last arrived)
+			if (m_hLastArrivedProp != m_hLowCoverProp)
+			{
+				float randomInterval = RandomFloat(8.0f, 12.0f);
+				m_flNextPropSearchTime = gpGlobals->curtime + randomInterval;
+				m_hLastArrivedProp = m_hLowCoverProp;  // Mark this prop as last arrived
+				Msg("[DEBUG] LOW_COVER: NEW prop arrived! Timer reset to %.1fs\n", randomInterval);
+			}
+			else
+			{
+				// Same prop - don't reset timer, let it continue counting down
+				Msg("[DEBUG] LOW_COVER: Same prop - timer continues (%.1fs remaining)\n",
+					m_flNextPropSearchTime - gpGlobals->curtime);
+			}
+
 			TaskComplete();
 			return;
 		}
 
-		// Set navigation (GatherConditions already validated navigability)
+		// Set navigation goal (GatherConditions already validated navigability)
 		AI_NavGoal_t goal(targetPosition, ACT_RUN, AIN_DEF_TOLERANCE);
 		if (GetNavigator()->SetGoal(goal))
 		{
@@ -4056,12 +4159,12 @@ int CNPC_Combine::SelectCombatSchedule()
 			{
 				// I'm the leader, but I didn't get the job suppressing the enemy. We know this because
 				// This code only runs if the code above didn't assign me SCHED_COMBINE_SUPPRESS.
-				if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+				if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 				{
 					return SCHED_RANGE_ATTACK1;
 				}
 
-				if (HasCondition(COND_WEAPON_HAS_LOS) && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+				if (HasCondition(COND_WEAPON_HAS_LOS) && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 				{
 					// If everyone else is attacking and I have line of fire, wait for a chance to cover someone.
 					if (OccupyStrategySlot(SQUAD_SLOT_OVERWATCH))
@@ -4089,7 +4192,7 @@ int CNPC_Combine::SelectCombatSchedule()
 					}
 				}
 
-				if (!bFirstContact && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+				if (!bFirstContact && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 				{
 					if (random->RandomInt(0, 100) < 60)
 					{
@@ -4211,7 +4314,7 @@ int CNPC_Combine::SelectCombatSchedule()
 			return SCHED_COMBINE_DEPLOY_MANHACK;
 #endif
 
-		if (GetEnemy() && !(GetEnemy()->GetFlags() & FL_NOTARGET) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+		if (GetEnemy() && !(GetEnemy()->GetFlags() & FL_NOTARGET) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 		{
 			// Charge in and break the enemy's cover!
 			return SCHED_ESTABLISH_LINE_OF_FIRE;
@@ -4241,7 +4344,7 @@ int CNPC_Combine::SelectCombatSchedule()
 		}
 		else
 #endif
-			if ((HasCondition(COND_TOO_FAR_TO_ATTACK) || IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY)) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+			if ((HasCondition(COND_TOO_FAR_TO_ATTACK) || IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY)) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 			{
 				return SCHED_COMBINE_PRESS_ATTACK;
 			}
@@ -4530,7 +4633,7 @@ int CNPC_Combine::SelectSchedule(void)
 
 	case NPC_STATE_COMBAT:
 	{
-		if (HasCondition(COND_SEE_ENEMY) && HasCondition(COND_CAN_RANGE_ATTACK1)) // [MODIFICATION-Dynamic Cover] - Start
+		if (HasCondition(COND_SEE_ENEMY) && HasCondition(COND_CAN_RANGE_ATTACK1)) // [MODIFICATION] - DYNAMIC COVER
 		{
 			bool hasLow = HasCondition(COND_COMBINE_HAS_LOW_COVER);
 			bool hasHigh = HasCondition(COND_COMBINE_HAS_HIGH_COVER);
@@ -4593,7 +4696,7 @@ int CNPC_Combine::SelectSchedule(void)
 
 			// If reached here, no valid covers available
 			Msg("[DEBUG] SelectSchedule: No valid cover available - using default AI\n");
-		} // [MODIFICATION-Dynamic Cover] - End
+		}  // [MODIFICATION] - DYNAMIC COVER
 		
 		int nSched = SelectCombatSchedule();
 		if (nSched != SCHED_NONE)
@@ -4625,10 +4728,10 @@ int CNPC_Combine::SelectFailSchedule(int failedSchedule, int failedTask, AI_Task
 	if (failedSchedule == SCHED_COMBINE_TAKE_COVER1)
 	{
 #ifdef MAPBASE
-		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2) && HasCondition(COND_SEE_ENEMY)
+		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10) && HasCondition(COND_SEE_ENEMY)
 			&& (!npc_combine_new_cover_behavior.GetBool() || (taskFailCode == FAIL_NO_COVER)))
 #else
-		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2) && HasCondition(COND_SEE_ENEMY))
+		if (IsInSquad() && IsStrategySlotRangeOccupied(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10) && HasCondition(COND_SEE_ENEMY))
 #endif
 		{
 			// This eases the effects of an unfortunate bug that usually plagues shotgunners. Since their rate of fire is low,
@@ -4795,12 +4898,12 @@ int CNPC_Combine::SelectScheduleAttack()
 		{
 			if (HasCondition(COND_SEE_ENEMY))
 			{
-				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 					return SCHED_RANGE_ATTACK1;
 			}
 			else
 			{
-				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+				if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 					return SCHED_COMBINE_PRESS_ATTACK;
 			}
 		}
@@ -4831,7 +4934,7 @@ int CNPC_Combine::SelectScheduleAttack()
 #endif
 
 		// Engage if allowed
-		if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+		if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 		{
 			return SCHED_RANGE_ATTACK1;
 		}
@@ -4968,7 +5071,7 @@ int CNPC_Combine::TranslateSchedule(int scheduleType)
 	break;
 	case SCHED_COMBINE_TAKECOVER_FAILED:
 	{
-		if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+		if (HasCondition(COND_CAN_RANGE_ATTACK1) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 		{
 			return TranslateSchedule(SCHED_RANGE_ATTACK1);
 		}
@@ -5057,7 +5160,7 @@ int CNPC_Combine::TranslateSchedule(int scheduleType)
 #endif
 		if (IsUsingTacticalVariant(TACTICAL_VARIANT_PRESSURE_ENEMY) && !IsRunningBehavior())
 		{
-			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+			if (OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 			{
 				return SCHED_COMBINE_PRESS_ATTACK;
 			}
@@ -6648,10 +6751,10 @@ bool CNPC_Combine::OnBeginMoveAndShoot()
 			return true; // Commandable Combine soldiers don't need a squad slot to move and shoot
 #endif
 
-		if (HasStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+		if (HasStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 			return true; // already have the slot I need
 
-		if (!HasStrategySlotRange(SQUAD_SLOT_GRENADE1, SQUAD_SLOT_ATTACK_OCCLUDER) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK2))
+		if (!HasStrategySlotRange(SQUAD_SLOT_GRENADE1, SQUAD_SLOT_ATTACK_OCCLUDER) && OccupyStrategySlotRange(SQUAD_SLOT_ATTACK1, SQUAD_SLOT_ATTACK10))
 			return true;
 	}
 	return false;
